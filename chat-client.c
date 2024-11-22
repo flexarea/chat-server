@@ -5,8 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define BUF_SIZE 4096
+
+void *handle_server_input(void * data);
 
 int main(int argc, char *argv[]){
     if (argc != 3) {
@@ -15,7 +18,6 @@ int main(int argc, char *argv[]){
     char *dest_hostname = argv[1];
     char *dest_port = argv[2];
     int rc;
-    char buf[BUF_SIZE];
     int n;
     struct addrinfo hints, *res;
 
@@ -43,13 +45,25 @@ int main(int argc, char *argv[]){
         exit(2);
     }
     puts("Connected\n");
-    int n2;
+
+    pthread_t child_thread;
+    pthread_create(&child_thread, NULL, handle_server_input, &conn_fd);
+    //Multi thread them both ???
+    
     // Read data from terminal and send to server
-    while((n = read(0, buf, BUF_SIZE)) >= 0) {
+    char buf[BUF_SIZE];
+    while((n = read(0, buf, BUF_SIZE)) > 0) {
         send(conn_fd, buf, n, 0);
-        if ((n2 = recv(conn_fd, buf, BUF_SIZE, 0)) > 0){
-            puts(buf);
-        }
     }
     close(conn_fd);
+}
+
+void *handle_server_input(void * data){
+    int n;
+    char in_buf[BUF_SIZE];
+    while((n = recv(*((int *) data), in_buf, BUF_SIZE, 0)) > 0){
+        puts(in_buf);
+
+    }
+    return NULL;
 }

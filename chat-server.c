@@ -1,7 +1,3 @@
-/*
- * echo-server.c
- */
-
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -11,8 +7,8 @@
 #include <string.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-
 #include <pthread.h>
+#include <time.h>
 
 #define BACKLOG 10
 #define BUF_SIZE 4096
@@ -76,6 +72,7 @@ int main(int argc, char *argv[])
         struct client *current_record = cl->clients + cl->number_clients;
         current_record->fd = conn_fd;
         current_record->client_list = cl;
+        current_record->username  = "User unkown";
         cl->number_clients += 1;
         if (cl->number_clients % 10 == 0) {
             // Number of clients is divisible by 10, so we need to allocate more space.
@@ -97,18 +94,26 @@ int main(int argc, char *argv[])
 
 void * client_instance(void* data) {
     struct client *c = data;
-    char buf[BUF_SIZE];
+    
     int bytes_received;
     while(1) {
+        char in_buff[BUF_SIZE] = {'\0'};
         /* receive and echo data until the other end closes the connection */
-        while((bytes_received = recv(c->fd, buf, BUF_SIZE, 0)) > 0) {
+        while((bytes_received = recv(c->fd, in_buff, BUF_SIZE, 0)) > 0) {
             printf("Message Recieved from %d\n", c->remote_port);
+            char out_buff[BUF_SIZE] = {'\0'};
+            time_t t;
+            time(&t);
+            struct tm * timeinfo;
+            // man 3 localtime is a magical thing
+            timeinfo = localtime( &t );
             
             for (int i = 0; i < (c->client_list->number_clients); i++){
                 struct client *loop_client = c->client_list->clients + i;
-                printf("Sending Message to %d\n", loop_client->remote_port);
-                fflush(stdout);
-                send(loop_client->fd, buf, bytes_received,0);
+                // ADD 9 bytes to account for the time
+                int bytes_to_send = snprintf(out_buff, bytes_received + 9, "%02d:%02d:%02d %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, in_buff);
+
+                send(loop_client->fd, out_buff, bytes_to_send,0);
             }
             /* send it back */
             //send(c->fd, buf, bytes_received, 0);
