@@ -48,12 +48,12 @@ int main(int argc, char *argv[]){
 
     pthread_t child_thread;
     pthread_create(&child_thread, NULL, handle_server_input, &conn_fd);
-    //Multi thread them both ???
     
     // Read data from terminal and send to server
     char buf[BUF_SIZE];
     while((n = read(0, buf, BUF_SIZE)) > 0) {
-        send(conn_fd, buf, n, 0);
+        buf[n] = '\0';
+        send(conn_fd, buf, n+1, 0);
     }
     close(conn_fd);
 }
@@ -62,8 +62,9 @@ void *handle_server_input(void * data){
     int n;
     char in_buf[BUF_SIZE];
     while((n = recv(*((int *) data), in_buf, BUF_SIZE, 0)) > 0){
-        puts(in_buf);
-
+        char out_buff[BUF_SIZE] = {'\0'};
+        strncpy(out_buff,in_buf,n);
+        puts(out_buff);
     }
     return NULL;
 }

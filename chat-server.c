@@ -9,12 +9,14 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <time.h>
+#include <stddef.h>
 
 #define BACKLOG 10
 #define BUF_SIZE 4096
 
 struct client {
     char * username;
+    int name_length;
     int fd;
     uint16_t remote_port;
     char *remote_ip;
@@ -26,6 +28,7 @@ struct client_list {
 };
 
 void *client_instance(void* data);
+int send_to_all_clients(struct client * c, char* s, int l);
 
 int main(int argc, char *argv[])
 {
@@ -73,6 +76,8 @@ int main(int argc, char *argv[])
         current_record->fd = conn_fd;
         current_record->client_list = cl;
         current_record->username  = "User unkown";
+        current_record->name_length = 11;
+
         cl->number_clients += 1;
         if (cl->number_clients % 10 == 0) {
             // Number of clients is divisible by 10, so we need to allocate more space.
@@ -83,7 +88,7 @@ int main(int argc, char *argv[])
        
         current_record->remote_ip = inet_ntoa(remote_sa.sin_addr);
         current_record->remote_port = ntohs(remote_sa.sin_port);
-        printf("new connection from %s:%d\n", current_record->remote_ip, current_record->remote_port);
+        printf("New connection from %s:%d\n", current_record->remote_ip, current_record->remote_port);
         pthread_t child_thread;
         pthread_create(&child_thread, NULL, client_instance, current_record);
 
@@ -98,30 +103,49 @@ void * client_instance(void* data) {
     int bytes_received;
     while(1) {
         char in_buff[BUF_SIZE] = {'\0'};
-        /* receive and echo data until the other end closes the connection */
         while((bytes_received = recv(c->fd, in_buff, BUF_SIZE, 0)) > 0) {
-            printf("Message Recieved from %d\n", c->remote_port);
+            //printf("Message Recieved from %d\n", c->remote_port);
+            int bytes_to_send = 0;
             char out_buff[BUF_SIZE] = {'\0'};
             time_t t;
             time(&t);
             struct tm * timeinfo;
             // man 3 localtime is a magical thing
             timeinfo = localtime( &t );
-            
-            for (int i = 0; i < (c->client_list->number_clients); i++){
-                struct client *loop_client = c->client_list->clients + i;
-                // ADD 9 bytes to account for the time
-                int bytes_to_send = snprintf(out_buff, bytes_received + 9, "%02d:%02d:%02d %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, in_buff);
-
-                send(loop_client->fd, out_buff, bytes_to_send,0);
+            if (in_buff[0] == '/'){
+                // we may be in the /nick case, check for "nick " (trailing space intentional)
+                char command_buff[6] = {'\0'};
+                strncpy(command_buff,in_buff+1,5);
+                if (strcmp(command_buff, "nick ") == 0) {
+                    char * name_buff = malloc(BUF_SIZE);
+                    int name_length = stpncpy(name_buff,(in_buff+6),BUF_SIZE) - name_buff;
+                    name_buff = realloc(name_buff, name_length);
+                    name_buff[name_length-1] = '\0';
+                    // 78 is total size of string without name
+                    bytes_to_send = snprintf(out_buff, 78 + name_length, "%02d:%02d:%02d: User unknown (%s:%d) is now known as %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, c->remote_ip, c->remote_port, name_buff);
+                    
+                    c->username = name_buff;
+                    c->name_length = name_length;
+                }else{
+                    continue;
+                }
+            }else{
+                bytes_to_send = snprintf(out_buff, bytes_received + 12 + c->name_length, "%02d:%02d:%02d: %s: %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, c->username ,in_buff);
             }
-            /* send it back */
-            //send(c->fd, buf, bytes_received, 0);
+            send_to_all_clients(c, out_buff, bytes_to_send);
         }
         printf("\n");
-
         close(c->fd);
         return NULL;
     }
+}
+
+int send_to_all_clients(struct client * c, char* s, int len) {
+    for (int i = 0; i < (c->client_list->number_clients); i++){
+                struct client *loop_client = c->client_list->clients + i;
+                // ADD 10 bytes to account for the time
+                send(loop_client->fd, s, len,0);
+    }
+    return 1;
 }
 
