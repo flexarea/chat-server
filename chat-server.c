@@ -21,10 +21,12 @@ struct client {
     uint16_t remote_port;
     char *remote_ip;
     struct client_list *client_list;
+    struct client *next;
+    struct client *prev;
 };
 struct client_list {
-    struct client * clients;
-    int number_clients;
+    struct client * head;
+    struct client * tail;
 };
 
 void *client_instance(void* data);
@@ -39,10 +41,12 @@ int main(int argc, char *argv[])
     struct sockaddr_in remote_sa;
     socklen_t addrlen;
     
-    struct client_list *cl = malloc(sizeof(struct client_list));
-    cl->clients = malloc(sizeof(struct client) * 10); // Set arbitrarily to allow 10 users before allocating more
-    cl->number_clients = 0;
-
+    struct client_list *cl;
+    if ((cl = malloc(sizeof(struct client_list))) == NULL) {
+        return -1;
+    }
+    cl->head = NULL;
+    cl->tail = NULL;
 
     listen_port = argv[1];
 
@@ -58,7 +62,6 @@ int main(int argc, char *argv[])
         printf("getaddrinfo failed: %s\n", gai_strerror(rc));
         exit(1);
     }
-
     bind(listen_fd, res->ai_addr, res->ai_addrlen);
 
     /* start listening */
@@ -69,63 +72,64 @@ int main(int argc, char *argv[])
         /* accept a new connection (will block until one appears) */
         addrlen = sizeof(remote_sa);
         conn_fd = accept(listen_fd, (struct sockaddr *) &remote_sa, &addrlen);
-        // Once it is done this iteration of the loop, it will be ready to accept again.
-        
-        // Update the number of active clients
-        struct client *current_record = cl->clients + cl->number_clients;
+ 
+        /* Set up new client struct and add it to the client list */
+        struct client *current_record;
+        if ((current_record = malloc(sizeof(struct client))) == NULL) {
+            return -1;
+        }
+        if (cl->head == NULL) {
+            cl->head = current_record;
+        }else{
+            cl->tail->next = current_record;
+            current_record->prev = cl->tail;
+        }
+        cl->tail = current_record;
         current_record->fd = conn_fd;
         current_record->client_list = cl;
         current_record->username  = "User unkown";
         current_record->name_length = 11;
+        current_record->next = NULL;
 
-        cl->number_clients += 1;
-        if (cl->number_clients % 10 == 0) {
-            // Number of clients is divisible by 10, so we need to allocate more space.
-            // This works becasue we de allocation 10 clients at a time.
-            cl->clients = realloc(cl->clients, cl->number_clients + 10);
-        }
-        /* announce our communication partner */
-       
         current_record->remote_ip = inet_ntoa(remote_sa.sin_addr);
         current_record->remote_port = ntohs(remote_sa.sin_port);
         printf("New connection from %s:%d\n", current_record->remote_ip, current_record->remote_port);
         pthread_t child_thread;
         pthread_create(&child_thread, NULL, client_instance, current_record);
-
-        // Close needs to be called in the new thread!
     }
-
 }
 
 void * client_instance(void* data) {
     struct client *c = data;
-    
     int bytes_received;
+    time_t t;
+    struct tm * timeinfo;
+
     while(1) {
         char in_buff[BUF_SIZE] = {'\0'};
         while((bytes_received = recv(c->fd, in_buff, BUF_SIZE, 0)) > 0) {
-            //printf("Message Recieved from %d\n", c->remote_port);
             int bytes_to_send = 0;
             char out_buff[BUF_SIZE] = {'\0'};
-            time_t t;
             time(&t);
-            struct tm * timeinfo;
-            // man 3 localtime is a magical thing
-            timeinfo = localtime( &t );
+            timeinfo = localtime(&t);
             if (in_buff[0] == '/'){
-                // we may be in the /nick case, check for "nick " (trailing space intentional)
+                // We may be in the /nick case, check for "nick " (trailing space intentional)
                 char command_buff[6] = {'\0'};
-                strncpy(command_buff,in_buff+1,5);
+                strncpy(command_buff, in_buff + 1, 5);
                 if (strcmp(command_buff, "nick ") == 0) {
-                    char * name_buff = malloc(BUF_SIZE);
-                    int name_length = stpncpy(name_buff,(in_buff+6),BUF_SIZE) - name_buff;
-                    name_buff = realloc(name_buff, name_length);
-                    name_buff[name_length-1] = '\0';
+                    char * name_buff;
+                    if ((name_buff = malloc(BUF_SIZE)) == NULL) {
+                        return NULL;
+                    }
+                    int new_name_length = stpncpy(name_buff, (in_buff+6), BUF_SIZE) - name_buff;
+                    if ((name_buff = realloc(name_buff, new_name_length)) == NULL) {
+                        return NULL;
+                    }
+                    name_buff[new_name_length-1] = '\0';
                     // 78 is total size of string without name
-                    bytes_to_send = snprintf(out_buff, 78 + name_length, "%02d:%02d:%02d: User unknown (%s:%d) is now known as %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, c->remote_ip, c->remote_port, name_buff);
-                    
+                    bytes_to_send = snprintf(out_buff, 78 + new_name_length + c->name_length, "%02d:%02d:%02d: %s (%s:%d) is now known as %s", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, c->username, c->remote_ip, c->remote_port, name_buff);
                     c->username = name_buff;
-                    c->name_length = name_length;
+                    c->name_length = new_name_length;
                 }else{
                     continue;
                 }
@@ -134,18 +138,44 @@ void * client_instance(void* data) {
             }
             send_to_all_clients(c, out_buff, bytes_to_send);
         }
-        printf("\n");
+        // Re-initialize time since it needs to be up to date. 
+        time(&t);
+        timeinfo = localtime( &t );
+        char disconect_msg[BUF_SIZE];
+        // 51 = 15 for time and "User" + 36 for everything else
+        int len = snprintf(disconect_msg, c->name_length + 51, "%02d:%02d:%02d: User %s (%s:%d) has disconnected", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, c->username, c->remote_ip, c->remote_port);
+        send_to_all_clients(c, disconect_msg, len);
+        
+        /* Update Linked list */
+        if (c->client_list->head == c) {
+            /* We are removing the HEAD */
+            c->client_list->head = NULL;
+        } else if (c->client_list->tail == c) {
+            /* We are removing the TAIL */
+            c->client_list->tail = c->prev;
+            c->prev->next = NULL;
+        }else{
+            /* We are removing any other node */
+            c->prev->next = c->next;
+            c->next->prev = c->prev;
+        }
+        
+        printf("Lost connection from %s.\n", c->username);
+        fflush(stdout);
         close(c->fd);
+        free(c);
         return NULL;
     }
 }
 
 int send_to_all_clients(struct client * c, char* s, int len) {
-    for (int i = 0; i < (c->client_list->number_clients); i++){
-                struct client *loop_client = c->client_list->clients + i;
-                // ADD 10 bytes to account for the time
-                send(loop_client->fd, s, len,0);
+    struct client *loop_client = c->client_list->head;
+    while (loop_client->next != NULL) {
+        send(loop_client->fd, s, len,0);
+        loop_client = loop_client->next;
     }
+    send(loop_client->fd, s, len,0);
+    loop_client = loop_client->next;
     return 1;
 }
 

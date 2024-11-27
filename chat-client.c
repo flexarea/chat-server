@@ -6,12 +6,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <signal.h>
 
 #define BUF_SIZE 4096
 
 void *handle_server_input(void * data);
 
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[]) {
     if (argc != 3) {
         return -1;
     }
@@ -55,6 +56,7 @@ int main(int argc, char *argv[]){
         buf[n] = '\0';
         send(conn_fd, buf, n+1, 0);
     }
+    puts("Exiting.");
     close(conn_fd);
 }
 
@@ -63,8 +65,10 @@ void *handle_server_input(void * data){
     char in_buf[BUF_SIZE];
     while((n = recv(*((int *) data), in_buf, BUF_SIZE, 0)) > 0){
         char out_buff[BUF_SIZE] = {'\0'};
-        strncpy(out_buff,in_buf,n);
+        strncpy(out_buff, in_buf, n);
         puts(out_buff);
     }
+    puts("Connection Closed by Remote Host.");
+    kill(0, 15);
     return NULL;
 }
