@@ -23,7 +23,11 @@ int main(int argc, char *argv[]) {
     struct addrinfo hints, *res;
 
     // Open the Socket:
-    int conn_fd = socket(PF_INET, SOCK_STREAM, 0);
+    int conn_fd;
+    if ((conn_fd = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("socket");
+        return -1;
+    }
 
     // Set up hints (must start by setting everything to 0)
     memset(&hints, 0, sizeof(hints));
@@ -48,16 +52,26 @@ int main(int argc, char *argv[]) {
     puts("Connected\n");
 
     pthread_t child_thread;
-    pthread_create(&child_thread, NULL, handle_server_input, &conn_fd);
+    if (pthread_create(&child_thread, NULL, handle_server_input, &conn_fd) != 0) {
+        perror("pthread_create");
+        return -1;
+    }
     
     // Read data from terminal and send to server
     char buf[BUF_SIZE];
     while((n = read(0, buf, BUF_SIZE)) > 0) {
         buf[n] = '\0';
-        send(conn_fd, buf, n+1, 0);
+        if (send(conn_fd, buf, n+1, 0) == -1) {
+            perror("send");
+            return -1;
+        }
     }
     puts("Exiting.");
-    close(conn_fd);
+    if (close(conn_fd) == -1) {
+        perror("close");
+        return -1;
+    }
+    return 0;
 }
 
 void *handle_server_input(void * data){
@@ -69,6 +83,6 @@ void *handle_server_input(void * data){
         puts(out_buff);
     }
     puts("Connection Closed by Remote Host.");
-    kill(0, 15);
+    exit(1);
     return NULL;
 }
