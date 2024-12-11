@@ -1,7 +1,5 @@
 .PHONY: all 
-all:
-	gcc -Wall -pedantic -o chat-client chat-client.c
-	gcc -Wall -pedantic -o chat-server chat-server.c
+all: chat-client chat-server
 
 chat-client: chat-client.c
 	gcc -Wall -pedantic -o chat-client chat-client.c

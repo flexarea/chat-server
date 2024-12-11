@@ -74,15 +74,19 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-void *handle_server_input(void * data){
+void *handle_server_input(void * data) {
     int n;
     char in_buf[BUF_SIZE];
-    while((n = recv(*((int *) data), in_buf, BUF_SIZE, 0)) > 0){
+    while((n = recv(*((int *) data), in_buf, BUF_SIZE, 0)) > 0) {
         char out_buff[BUF_SIZE] = {'\0'};
         strncpy(out_buff, in_buf, n);
         puts(out_buff);
     }
-    puts("Connection Closed by Remote Host.");
+    if (n == -1) {
+        perror("recv");
+    } else {
+        puts("Connection Closed by Remote Host.");
+    }
     exit(1);
     return NULL;
 }
