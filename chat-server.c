@@ -16,7 +16,6 @@
 
 struct client {
     char * username;
-    int name_length;
     int fd;
     uint16_t rem_port;
     char *rem_ip;
@@ -28,7 +27,7 @@ struct client_list {
     struct client * head;
     struct client * tail;
 };
-pthread_mutex_t sync_state;
+pthread_mutex_t list_mutex;
 
 void get_time(char *t_buff);
 void *handle_client(void* data);
@@ -90,30 +89,36 @@ int main(int argc, char *argv[])
         }
  
         /* Set up new client struct and add it to the client list */
-        pthread_mutex_lock(&sync_state);
+        
         struct client *current_record;
         if ((current_record = malloc(sizeof(struct client))) == NULL) {
             return -1;
         }
+        
         if (cl->head == NULL) {
             cl->head = current_record;
         } else {
             cl->tail->next = current_record;
             current_record->prev = cl->tail;
         }
+        pthread_mutex_lock(&list_mutex);
         cl->tail = current_record;
+        pthread_mutex_unlock(&list_mutex);
         current_record->fd = conn_fd;
         current_record->client_list = cl;
         current_record->username  = "User unknown";
-        current_record->name_length = 11;
         current_record->next = NULL;
-
-        if ((current_record->rem_ip = inet_ntoa(remote_sa.sin_addr)) == 0) {
+        char * temp_ip;
+        if ((temp_ip = inet_ntoa(remote_sa.sin_addr)) == 0) {
             perror("inet_ntoa");
             return -1;
         }
+        if ((current_record->rem_ip = strdup(temp_ip)) == NULL) {
+            perror("strdup");
+            return -1;
+        }
         current_record->rem_port = ntohs(remote_sa.sin_port);
-        pthread_mutex_unlock(&sync_state);
+        
         printf("New connection from %s:%d\n", current_record->rem_ip, current_record->rem_port);
         pthread_t child_thread;
         pthread_create(&child_thread, NULL, handle_client, current_record);
@@ -135,13 +140,13 @@ void *handle_client(void* data) {
                 char command_buff[6] = {'\0'};
                 strncpy(command_buff, in_buff + 1, 5);
                 if (strcmp(command_buff, "nick ") == 0) {
-                    send_bytes = rename_client(in_buff, t_buff,out_buff, c);
+                    send_bytes = rename_client(in_buff, t_buff, out_buff, c);
                 } else {
                     continue;
                 }
             } else {
                 // Its a message for clients
-                int len = bytes_received + 12 + c->name_length;
+                int len = bytes_received + 12 + strlen(c->username);
                 if ((send_bytes = snprintf(out_buff, len, "%s: %s: %s", t_buff, c->username ,in_buff)) < 0) {
                     perror("snprintf");
                     return NULL;
@@ -189,29 +194,26 @@ int rename_client(char * in_buff, char * t_buff, char * out_buff, struct client 
     }
     name_buff[new_name_length-1] = '\0';
     // 78 is total size of string without name
-    int len = 78 + new_name_length + c->name_length;
+    int len = 78 + new_name_length + strlen(c->username);
     send_bytes = snprintf(out_buff, len, "%s: %s (%s:%d) is now known as %s", t_buff, c->username, c->rem_ip, c->rem_port, name_buff);
-    pthread_mutex_lock(&sync_state);
     c->username = name_buff;
-    c->name_length = new_name_length;
-    pthread_mutex_unlock(&sync_state);
     return send_bytes;
 }
 
 void disconect_client(struct client * c) {
     char t_buff[10];
     get_time(t_buff);
-    // Move me to another FUNCTION!
     char disconect_msg[BUF_SIZE];
     // 51 = 15 for time and "User" + 36 for everything else
-    int str_len = 52 + c->name_length;
+    int str_len = 52 + strlen(c->username);
     int out_len;
     if ((out_len= snprintf(disconect_msg, str_len, "%s: User %s (%s:%d) has disconnected", t_buff, c->username, c->rem_ip, c->rem_port)) < 0) {
         perror("snprintf");
         exit(-1);
     }
+   
     send_to_all_clients(c, disconect_msg, out_len);
-    pthread_mutex_lock(&sync_state);
+    pthread_mutex_lock(&list_mutex);
     /* Update Linked list */
     if (c->client_list->head == c) {
         /* We are removing the HEAD */
@@ -225,23 +227,26 @@ void disconect_client(struct client * c) {
         c->prev->next = c->next;
         c->next->prev = c->prev;
     }
+    pthread_mutex_unlock(&list_mutex);
     printf("Lost connection from %s.\n", c->username);
     fflush(stdout);
     close(c->fd);
+    free(c->rem_ip);
     free(c);
-    pthread_mutex_unlock(&sync_state);
 }
 
 void send_to_all_clients(struct client * c, char* s, int len) {
+    pthread_mutex_lock(&list_mutex);
     struct client *cur = c->client_list->head;
+    pthread_mutex_unlock(&list_mutex);
     while (cur->next != NULL) {
-        if (send(cur->fd, s, len,0) == -1) {
+        if (send(cur->fd, s, len, 0) == -1) {
             perror("send");
             return;
         }
         cur = cur->next;
     }
-    if (send(cur->fd, s, len,0) == -1) {
+    if (send(cur->fd, s, len, 0) == -1) {
             perror("send");
             return;
         }
